@@ -809,6 +809,14 @@ This command searches for packages on a remote index.
 poetry search requests pendulum
 ```
 
+{{% note %}}
+PyPI no longer allows for the search of packages without a browser. Please use https://pypi.org/search
+(via a browser) instead.
+
+For more information please see [warehouse documentation](https://warehouse.pypa.io/api-reference/xml-rpc.html#deprecated-methods)
+and this [discussion](https://discuss.python.org/t/fastly-interfering-with-pypi-search/73597/6).
+{{% /note %}}
+
 ## lock
 
 This command locks (without installing) the dependencies specified in `pyproject.toml`.
@@ -1178,7 +1186,7 @@ you can also define in your `pyproject.toml` that the plugin is required for the
 
 ```toml
 [tool.poetry.requires-plugins]
-poetry-plugin-export = ">1.8"
+poetry-plugin-export = ">=1.8"
 ```
 {{% /warning %}}
 
