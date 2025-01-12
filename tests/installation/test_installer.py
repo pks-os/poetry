@@ -373,6 +373,8 @@ def _configure_run_install_dev(
 
 
 @pytest.mark.parametrize("lock_version", ("1.1", "2.1"))
+@pytest.mark.parametrize("update", [False, True])
+@pytest.mark.parametrize("requires_synchronization", [False, True])
 @pytest.mark.parametrize(
     ("groups", "installs", "updates", "removals", "with_packages_installed"),
     [
@@ -399,6 +401,8 @@ def test_run_install_with_dependency_groups(
     repo: Repository,
     package: ProjectPackage,
     installed: CustomInstalledRepository,
+    update: bool,
+    requires_synchronization: bool,
     lock_version: str,
 ) -> None:
     _configure_run_install_dev(
@@ -414,10 +418,13 @@ def test_run_install_with_dependency_groups(
     if groups is not None:
         installer.only_groups(groups)
 
-    installer.requires_synchronization(True)
+    installer.update(update)
+    installer.requires_synchronization(requires_synchronization)
     result = installer.run()
     assert result == 0
 
+    if not requires_synchronization:
+        removals = 0
     assert installer.executor.installations_count == installs
     assert installer.executor.updates_count == updates
     assert installer.executor.removals_count == removals
@@ -1393,6 +1400,7 @@ def test_run_with_different_dependency_extras(
 @pytest.mark.parametrize("is_locked", [False, True])
 @pytest.mark.parametrize("is_installed", [False, True])
 @pytest.mark.parametrize("with_extras", [False, True])
+@pytest.mark.parametrize("do_update", [False, True])
 @pytest.mark.parametrize("do_sync", [False, True])
 def test_run_installs_extras_with_deps_if_requested(
     installer: Installer,
@@ -1403,6 +1411,7 @@ def test_run_installs_extras_with_deps_if_requested(
     is_locked: bool,
     is_installed: bool,
     with_extras: bool,
+    do_update: bool,
     do_sync: bool,
 ) -> None:
     package.extras = {canonicalize_name("foo"): [get_dependency("C")]}
@@ -1436,6 +1445,7 @@ def test_run_installs_extras_with_deps_if_requested(
 
     if with_extras:
         installer.extras(["foo"])
+    installer.update(do_update)
     installer.requires_synchronization(do_sync)
     result = installer.run()
     assert result == 0
@@ -1452,7 +1462,7 @@ def test_run_installs_extras_with_deps_if_requested(
         expected_installations_count = 0 if is_installed else 2
         # We only want to uninstall extras if we do a "poetry install" without extras,
         # not if we do a "poetry update" or "poetry add".
-        expected_removals_count = 2 if is_installed else 0
+        expected_removals_count = 2 if is_installed and do_sync else 0
 
     assert installer.executor.installations_count == expected_installations_count
     assert installer.executor.removals_count == expected_removals_count
