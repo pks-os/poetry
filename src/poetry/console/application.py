@@ -4,7 +4,6 @@ import logging
 import re
 
 from contextlib import suppress
-from functools import cached_property
 from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,10 +20,12 @@ from poetry.__version__ import __version__
 from poetry.console.command_loader import CommandLoader
 from poetry.console.commands.command import Command
 from poetry.utils.helpers import directory
+from poetry.utils.helpers import ensure_path
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import Any
 
     from cleo.events.event import Event
     from cleo.io.inputs.argv_input import ArgvInput
@@ -103,6 +104,8 @@ class Application(BaseApplication):
         self._disable_plugins = False
         self._disable_cache = False
         self._plugins_loaded = False
+        self._working_directory = Path.cwd()
+        self._project_directory: Path | None = None
 
         dispatcher = EventDispatcher()
         dispatcher.add_listener(COMMAND, self.register_command_loggers)
@@ -156,20 +159,9 @@ class Application(BaseApplication):
 
         return definition
 
-    @cached_property
-    def _project_directory(self) -> Path:
-        if self._io and self._io.input.option("project"):
-            with directory(self._working_directory):
-                return Path(self._io.input.option("project")).absolute()
-
-        return self._working_directory
-
-    @cached_property
-    def _working_directory(self) -> Path:
-        if self._io and self._io.input.option("directory"):
-            return Path(self._io.input.option("directory")).absolute()
-
-        return Path.cwd()
+    @property
+    def project_directory(self) -> Path:
+        return self._project_directory or self._working_directory
 
     @property
     def poetry(self) -> Poetry:
@@ -179,7 +171,7 @@ class Application(BaseApplication):
             return self._poetry
 
         self._poetry = Factory().create_poetry(
-            cwd=self._project_directory,
+            cwd=self.project_directory,
             io=self._io,
             disable_plugins=self._disable_plugins,
             disable_cache=self._disable_cache,
@@ -227,8 +219,11 @@ class Application(BaseApplication):
         return io
 
     def _run(self, io: IO) -> int:
-        self._disable_plugins = io.input.parameter_option("--no-plugins")
-        self._disable_cache = io.input.has_parameter_option("--no-cache")
+        # we do this here and not inside the _configure_io implementation in order
+        # to ensure the users are not exposed to a stack trace for providing invalid values to
+        # the options --directory or --project, configuring the options here allow cleo to trap and
+        # display the error cleanly unless the user uses verbose or debug
+        self._configure_custom_application_options(io)
 
         self._load_plugins(io)
 
@@ -236,6 +231,51 @@ class Application(BaseApplication):
             exit_code: int = super()._run(io)
 
         return exit_code
+
+    def _option_get_value(self, io: IO, name: str, default: Any) -> Any:
+        option = self.definition.option(name)
+
+        if option is None:
+            return default
+
+        values = [f"--{option.name}"]
+
+        if option.shortcut:
+            values.append(f"-{option.shortcut}")
+
+        if not io.input.has_parameter_option(values):
+            return default
+
+        if option.is_flag():
+            return True
+
+        return io.input.parameter_option(values=values, default=default)
+
+    def _configure_custom_application_options(self, io: IO) -> None:
+        self._disable_plugins = self._option_get_value(
+            io, "no-plugins", self._disable_plugins
+        )
+        self._disable_cache = self._option_get_value(
+            io, "no-cache", self._disable_cache
+        )
+
+        # we use ensure_path for the directories to make sure these are valid paths
+        # this will raise an exception if the path is invalid
+        self._working_directory = ensure_path(
+            self._option_get_value(io, "directory", Path.cwd()), is_directory=True
+        )
+
+        self._project_directory = self._option_get_value(io, "project", None)
+        if self._project_directory is not None:
+            self._project_directory = Path(self._project_directory)
+            self._project_directory = ensure_path(
+                self._project_directory
+                if self._project_directory.is_absolute()
+                else self._working_directory.joinpath(self._project_directory).resolve(
+                    strict=False
+                ),
+                is_directory=True,
+            )
 
     def _configure_io(self, io: IO) -> None:
         # We need to check if the command being run
@@ -394,7 +434,7 @@ class Application(BaseApplication):
             from poetry.plugins.application_plugin import ApplicationPlugin
             from poetry.plugins.plugin_manager import PluginManager
 
-            PluginManager.add_project_plugin_path(self._project_directory)
+            PluginManager.add_project_plugin_path(self.project_directory)
             manager = PluginManager(ApplicationPlugin.group)
             manager.load_plugins()
             manager.activate(self)
